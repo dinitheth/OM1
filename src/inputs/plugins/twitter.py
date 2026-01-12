@@ -63,6 +63,7 @@ class TwitterInput(FuserInput[TwitterSensorConfig, Optional[str]]):
         """Async context manager exit"""
         if self.session:
             await self.session.close()
+            self.session = None
 
     async def _init_session(self):
         """Initialize aiohttp session if not exists."""
@@ -139,11 +140,17 @@ class TwitterInput(FuserInput[TwitterSensorConfig, Optional[str]]):
         """Listen for new messages."""
         await self.start()
 
-        while True:
-            message = await self._poll()
-            if message:
-                yield message
-            await asyncio.sleep(0.1)
+        try:
+            while True:
+                message = await self._poll()
+                if message:
+                    yield message
+                await asyncio.sleep(0.1)
+        finally:
+            # Ensure session is closed when listen loop exits
+            if self.session:
+                await self.session.close()
+                self.session = None
 
     async def _poll(self) -> Optional[str]:
         """Poll for new messages."""

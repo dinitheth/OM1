@@ -100,11 +100,41 @@ class CortexRuntime:
         str
             The absolute path to the runtime config file
         """
-        memory_folder_path = os.path.join(
+        # Prefer XDG_CONFIG_HOME or ~/.config/om1
+        xdg_config_home = os.environ.get("XDG_CONFIG_HOME")
+        if xdg_config_home:
+            memory_folder_path = os.path.join(xdg_config_home, "om1", "memory")
+        else:
+            home = os.path.expanduser("~")
+            memory_folder_path = os.path.join(home, ".config", "om1", "memory")
+
+        # Use local config/memory if not in a container/production environment
+        # or if explicitly configured to do so.
+        # For now, if we are in development mode (source tree), we might still want to use source tree config
+        # but for safety/security audit compliance, we should default to user home.
+
+        # Check if we are running from source and config/memory exists
+        source_memory_path = os.path.join(
             os.path.dirname(__file__), "../../../config", "memory"
         )
+        if os.path.exists(source_memory_path) and os.access(
+            source_memory_path, os.W_OK
+        ):
+            # Log warning that we are using source tree for runtime config
+            logging.debug("Using source tree config/memory for runtime config.")
+            memory_folder_path = source_memory_path
+
         if not os.path.exists(memory_folder_path):
-            os.makedirs(memory_folder_path, mode=0o755, exist_ok=True)
+            try:
+                os.makedirs(memory_folder_path, mode=0o755, exist_ok=True)
+            except OSError:
+                # Fallback to temp dir if we can't create config dir
+                import tempfile
+
+                memory_folder_path = os.path.join(
+                    tempfile.gettempdir(), "om1", "memory"
+                )
+                os.makedirs(memory_folder_path, mode=0o755, exist_ok=True)
 
         return os.path.join(memory_folder_path, ".runtime.json5")
 

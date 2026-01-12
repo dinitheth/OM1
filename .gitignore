@@ -12,11 +12,9 @@ wheels/
 .venv
 
 # Environment variables
-.env
 *.lock
 
 # IDE
-.vscode/
 
 # Debug files
 front_image.jpg
@@ -43,3 +41,5 @@ logs/
 # Mode system state files
 config/memory
 config/.runtime.json5
+config.bat
+node_modules

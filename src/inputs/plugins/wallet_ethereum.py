@@ -1,10 +1,10 @@
 import asyncio
 import logging
 import os
-import random
 import time
 from typing import List, Optional
 
+from pydantic import Field
 from web3 import Web3
 
 from inputs.base import Message, SensorConfig
@@ -12,7 +12,35 @@ from inputs.base.loop import FuserInput
 from providers.io_provider import IOProvider
 
 
-class WalletEthereum(FuserInput[SensorConfig, List[float]]):
+class WalletEthereumConfig(SensorConfig):
+    """
+    Configuration for Ethereum Wallet Sensor.
+
+    Parameters
+    ----------
+    provider_url : str
+        The Ethereum provider URL.
+    poll_interval : float
+        Interval in seconds between blockchain data updates.
+    account_address : str
+        The Ethereum account address to monitor.
+    """
+
+    provider_url: str = Field(
+        default="https://eth.llamarpc.com", description="The Ethereum provider URL."
+    )
+    poll_interval: float = Field(
+        default=4.0, description="Interval in seconds between blockchain data updates."
+    )
+    account_address: str = Field(
+        default_factory=lambda: os.environ.get(
+            "ETH_ADDRESS", "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"
+        ),
+        description="The Ethereum account address to monitor.",
+    )
+
+
+class WalletEthereum(FuserInput[WalletEthereumConfig, List[float]]):
     """
     Ethereum wallet monitor that tracks ETH balance changes.
 
@@ -25,7 +53,7 @@ class WalletEthereum(FuserInput[SensorConfig, List[float]]):
         If connection to Ethereum network fails
     """
 
-    def __init__(self, config: SensorConfig):
+    def __init__(self, config: WalletEthereumConfig):
         """
         Initialize WalletEthereum instance.
         """
@@ -34,19 +62,17 @@ class WalletEthereum(FuserInput[SensorConfig, List[float]]):
         # Track IO
         self.io_provider = IOProvider()
 
-        self.ETH_balance = 0
-        self.ETH_balance_previous = 0
-        self.balance_eth = 0
-        self.balance_change = 0
+        self.ETH_balance = 0.0
+        self.ETH_balance_previous = 0.0
+        self.balance_eth = 0.0
+        self.balance_change = 0.0
 
         self.messages: list[Message] = []
-        self.eth_info = ""
+        self.eth_info = {}
 
-        self.PROVIDER_URL = "https://eth.llamarpc.com"
-        self.POLL_INTERVAL = 4  # seconds between blockchain data updates
-        self.ACCOUNT_ADDRESS = os.environ.get(
-            "ETH_ADDRESS", "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"
-        )
+        self.PROVIDER_URL = self.config.provider_url
+        self.POLL_INTERVAL = self.config.poll_interval
+        self.ACCOUNT_ADDRESS = self.config.account_address
         logging.debug(f"Using {self.ACCOUNT_ADDRESS} as the wallet address")
         logging.info("Testing: WalletEthereum: Initialized")
 
@@ -54,6 +80,19 @@ class WalletEthereum(FuserInput[SensorConfig, List[float]]):
         self.web3 = Web3(Web3.HTTPProvider(self.PROVIDER_URL))
         if not self.web3.is_connected():
             raise Exception("Failed to connect to Ethereum")
+
+    def _get_balance_blocking(self):
+        """
+        Blocking call to get Ethereum balance.
+        """
+        try:
+            block_number = self.web3.eth.block_number
+            balance_wei = self.web3.eth.get_balance(self.ACCOUNT_ADDRESS)  # type: ignore
+            balance_eth = float(self.web3.from_wei(balance_wei, "ether"))
+            return block_number, balance_eth
+        except Exception as e:
+            logging.error(f"Error fetching blockchain data: {e}")
+            return None, None
 
     async def _poll(self) -> List[float]:
         """
@@ -66,41 +105,26 @@ class WalletEthereum(FuserInput[SensorConfig, List[float]]):
         """
         await asyncio.sleep(self.POLL_INTERVAL)
 
-        try:
-            # Get latest block data
-            block_number = self.web3.eth.block_number
+        loop = asyncio.get_running_loop()
+        block_number, balance_eth = await loop.run_in_executor(
+            None, self._get_balance_blocking
+        )
 
-            # Get account data
-            balance_wei = self.web3.eth.get_balance(self.ACCOUNT_ADDRESS)  # type: ignore
-            self.balance_eth = float(self.web3.from_wei(balance_wei, "ether"))
-
+        if block_number is not None and balance_eth is not None:
+            self.balance_eth = balance_eth
             self.eth_info = {
                 "block_number": int(block_number),
-                "address": str(
-                    self.ACCOUNT_ADDRESS
-                ),  # that's a string prefixed with `0x`
+                "address": str(self.ACCOUNT_ADDRESS),
                 "balance": self.balance_eth,
             }
             logging.debug(
                 f"Block: {self.eth_info['block_number']}, Account Balance: {self.eth_info['balance']:.3f} ETH"
             )
 
-            # randomly simulate ETH inbound transfers for debugging purposes
-            random_add_for_debugging = 0
-            dice = random.randint(0, 10)
-            logging.debug(f"WalletEthereum: dice {dice}")
-            if dice > 7:
-                logging.info("WalletEthereum: randomly adding 1.0 ETH")
-                random_add_for_debugging = 1.0
-
-            self.ETH_balance = self.balance_eth + random_add_for_debugging
+            self.ETH_balance = self.balance_eth
             self.balance_change = self.ETH_balance - self.ETH_balance_previous
             self.ETH_balance_previous = self.ETH_balance
 
-        except Exception as e:
-            logging.error(f"Error fetching blockchain data: {e}")
-
-        # use the old values if the try fails, otherwise use the new/updated values
         return [self.ETH_balance, self.balance_change]
 
     async def _raw_to_text(self, raw_input: List[float]) -> Optional[Message]:

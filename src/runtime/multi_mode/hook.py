@@ -123,7 +123,10 @@ class CommandHookHandler(LifecycleHookHandler):
 
         try:
             formatted_command = command.format(**context)
+            logging.info(f"Executing hook command: {formatted_command}")
 
+            # WARNING: This uses create_subprocess_shell which is equivalent to shell=True.
+            # This is potentially unsafe if context contains untrusted input.
             process = await asyncio.create_subprocess_shell(
                 formatted_command,
                 stdout=asyncio.subprocess.PIPE,
