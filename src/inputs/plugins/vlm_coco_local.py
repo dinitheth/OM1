@@ -91,6 +91,9 @@ class VLM_COCO_Local(FuserInput[VLM_COCO_LocalConfig, Optional[np.ndarray]]):
 
         # Start capturing video, if we have a webcam
         self.cap = None
+        self.width = 0
+        self.height = 0
+        self.cam_third = 0
         if self.have_cam:
             self.cap = cv2.VideoCapture(self.camera_index)
             self.width = int(self.cap.get(3))  # float `width`
@@ -99,6 +102,16 @@ class VLM_COCO_Local(FuserInput[VLM_COCO_LocalConfig, Optional[np.ndarray]]):
             logging.info(
                 f"Webcam pixel dimensions for COCO: {self.width}, {self.height}"
             )
+
+    def _read_frame_blocking(self):
+        """
+        Blocking read frame from webcam.
+        """
+        if self.have_cam and self.cap is not None:
+            ret, frame = self.cap.read()
+            if ret:
+                return frame
+        return None
 
     async def _poll(self) -> Optional[np.ndarray]:
         """
@@ -118,7 +131,8 @@ class VLM_COCO_Local(FuserInput[VLM_COCO_LocalConfig, Optional[np.ndarray]]):
         # logging.info(f"VLM_COCO_Local poll")
 
         if self.have_cam and self.cap is not None:
-            ret, frame = self.cap.read()
+            loop = asyncio.get_running_loop()
+            frame = await loop.run_in_executor(None, self._read_frame_blocking)
             # logging.info(f"VLM_COCO_Local frame: {frame}")
             return frame
 
@@ -148,9 +162,11 @@ class VLM_COCO_Local(FuserInput[VLM_COCO_LocalConfig, Optional[np.ndarray]]):
             tensor_image = torch.tensor(
                 batch_image / 255.0, dtype=torch.float, device=self.device
             )
-            mobilenet_detections = self.model(tensor_image)[
-                0
-            ]  # pylint: disable=E1102 disable not callable warning
+            # Run inference in executor to avoid blocking loop
+            loop = asyncio.get_running_loop()
+            mobilenet_detections = await loop.run_in_executor(
+                None, lambda: self.model(tensor_image)[0]
+            )
 
             # logging.info(f"VLM_COCO_Local detections: {mobilenet_detections}")
             filtered_detections = [
@@ -250,3 +266,7 @@ INPUT: {self.descriptor_for_LLM}
         self.messages = []
 
         return result
+
+    def __del__(self):
+        if self.cap and self.cap.isOpened():
+            self.cap.release()

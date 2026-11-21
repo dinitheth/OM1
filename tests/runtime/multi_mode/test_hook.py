@@ -261,9 +261,8 @@ async def test_command_handler_successful_execution(sample_context):
         with patch("runtime.multi_mode.hook.logging") as mock_logging:
             result = await handler.execute(sample_context)
             assert result is True
-            mock_logging.info.assert_called_once_with(
-                "Hook command output: Mode: test_mode"
-            )
+            # Expect multiple calls because we now log the command before execution
+            mock_logging.info.assert_any_call("Hook command output: Mode: test_mode")
 
 
 @pytest.mark.asyncio
